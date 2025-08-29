@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Alerts - Network Security Monitor{% endblock %}
+
+{% block content %}
+<style>
+    .alert-row:hover {
+        background-color: var(--background-card);
+        cursor: pointer;
+        box-shadow: 0 0 15px rgba(0, 255, 255, 0.1);
+    }
+    .severity-dot {
+        height: 12px;
+        width: 12px;
+        border-radius: 50%;
+        display: inline-block;
+        box-shadow: 0 0 8px;
+    }
+    .severity-HIGH { background-color: var(--accent-secondary); color: var(--accent-secondary); }
+    .severity-MEDIUM { background-color: #f7b733; color: #f7b733; }
+    .severity-LOW { background-color: var(--accent-tertiary); color: var(--accent-tertiary); }
+</style>
+
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom" style="border-color: var(--border-color) !important;">
+    <h1 class="h2">Active Alerts</h1>
+</div>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>All Unresolved Security Alerts</span>
+        <div id="alert-count-badge" class="badge bg-danger rounded-pill">0</div>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-dark table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th scope="col" class="ps-4">Severity</th>
+                        <th scope="col">Title</th>
+                        <th scope="col">Source IP</th>
+                        <th scope="col">Timestamp</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="alerts-table-body">
+                    <tr><td colspan="5" class="text-center p-5"><div class="spinner-border text-primary" role="status"></div></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="alertDetailsModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content" style="background-color: var(--background-secondary); border: 1px solid var(--border-color);">
+      <div class="modal-header" style="border-bottom-color: var(--border-color);">
+        <h5 class="modal-title" id="alertDetailsModalLabel">Alert Details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="alert-modal-body"></div>
+      <div class="modal-footer" style="border-top-color: var(--border-color);">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-success" id="resolve-alert-btn" style="background-color: var(--accent-tertiary); border: none; color: var(--background-primary);">Mark as Resolved</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const alertsTableBody = document.getElementById('alerts-table-body');
+    const alertCountBadge = document.getElementById('alert-count-badge');
+    const modalBody = document.getElementById('alert-modal-body');
+    const resolveBtn = document.getElementById('resolve-alert-btn');
+    const alertModal = new bootstrap.Modal(document.getElementById('alertDetailsModal'));
+    let currentAlertId = null;
+
+    const UIRenderer = {
+        renderAlerts: (alerts) => {
+            alertCountBadge.textContent = alerts.length;
+            if (alerts.length === 0) {
+                alertsTableBody.innerHTML = `<tr><td colspan="5" class="text-center text-secondary p-5">No active alerts. System is clear.</td></tr>`;
+                return;
+            }
+            alertsTableBody.innerHTML = alerts.map(alert => `
+                <tr class="alert-row" data-alert-id="${alert.id}">
+                    <td class="ps-4"><span class="severity-dot severity-${alert.severity.toUpperCase()} me-2"></span>${alert.severity}</td>
+                    <td>${alert.title}</td>
+                    <td><code>${alert.src_ip || 'N/A'}</code></td>
+                    <td>${new Date(alert.timestamp).toLocaleString()}</td>
+                    <td><button class="btn btn-sm btn-outline-info" onclick="event.stopPropagation(); showDetails(${alert.id})">Details</button></td>
+                </tr>
+            `).join('');
+            UIRenderer.attachRowListeners();
+        },
+        renderModal: (alert) => {
+            const metadataHtml = (alert.alert_metadata && Object.keys(alert.alert_metadata).length > 0)
+                ? `<ul class="list-group list-group-flush">${Object.entries(alert.alert_metadata).map(([key, value]) => `<li class="list-group-item bg-transparent"><strong>${key}:</strong> ${JSON.stringify(value)}</li>`).join('')}</ul>`
+                : '<p>No additional data.</p>';
+            
+            const colors = { HIGH: 'danger', MEDIUM: 'warning', LOW: 'success' };
+            modalBody.innerHTML = `
+                <h5>${alert.title}</h5>
+                <p>${alert.description}</p><hr>
+                <p><strong>Severity:</strong> <span class="badge bg-${colors[alert.severity.toUpperCase()] || 'secondary'}">${alert.severity}</span></p>
+                <p><strong>Source IP:</strong> <code>${alert.src_ip || 'N/A'}</code></p>
+                <p><strong>Detected At:</strong> ${new Date(alert.timestamp).toLocaleString()}</p>
+                <h6>Metadata:</h6>${metadataHtml}`;
+            currentAlertId = alert.id;
+            alertModal.show();
+        },
+        attachRowListeners: () => {
+            document.querySelectorAll('.alert-row').forEach(row => {
+                row.addEventListener('click', () => showDetails(parseInt(row.dataset.alertId)));
+            });
+        }
+    };
+
+    const DataManager = {
+        alertsCache: [],
+        fetchAlerts: () => {
+            fetch('/api/alerts/active')
+                .then(res => {
+                    // --- FIX: Check if the server response is OK ---
+                    if (!res.ok) {
+                        // If not OK (e.g., 500 error), throw an error to trigger the .catch() block
+                        throw new Error(`Server responded with status: ${res.status}`);
+                    }
+                    return res.json();
+                })
+                .then(data => {
+                    DataManager.alertsCache = data;
+                    UIRenderer.renderAlerts(data);
+                })
+                .catch(err => {
+                    console.error("Error fetching alerts:", err);
+                    // --- FIX: Display a user-friendly error message in the table ---
+                    alertsTableBody.innerHTML = `<tr><td colspan="5" class="text-center text-danger p-5"><strong>Error Loading Alerts</strong><br><small>The server returned an error. Please check the Flask terminal for details.</small></td></tr>`;
+                });
+        },
+        resolveAlert: () => {
+            if (!currentAlertId) return;
+            fetch(`/api/alerts/${currentAlertId}/resolve`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ resolved_by: 'Admin' })
+            }).then(() => {
+                alertModal.hide();
+                DataManager.fetchAlerts();
+            }).catch(console.error);
+        }
+    };
+
+    window.showDetails = (alertId) => {
+        const alert = DataManager.alertsCache.find(a => a.id === alertId);
+        if (alert) UIRenderer.renderModal(alert);
+    };
+
+    DataManager.fetchAlerts();
+    resolveBtn.addEventListener('click', DataManager.resolveAlert);
+    window.socket.on('new_alert', DataManager.fetchAlerts);
+    window.socket.on('alert_resolved', DataManager.fetchAlerts);
+});
+</script>
+{% endblock %}

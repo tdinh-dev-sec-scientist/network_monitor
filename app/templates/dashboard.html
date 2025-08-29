@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Network Security Monitor{% endblock %}
+
+{% block content %}
+<style>
+    .metric-card {
+        border: 1px solid var(--border-color);
+        transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+    }
+    .metric-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 0 25px rgba(0, 255, 255, 0.15);
+        border-color: var(--accent-primary);
+    }
+    .metric-card h2 {
+        font-weight: 700;
+        color: var(--accent-primary);
+        text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+    }
+    .list-group-item {
+        border-color: var(--border-color) !important;
+    }
+</style>
+
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom" style="border-color: var(--border-color) !important;">
+    <h1 class="h2">Live Network Dashboard</h1>
+</div>
+
+<div class="row mb-4">
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card metric-card h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="card-title text-secondary">Packets/Second</h5>
+                        <h2 id="packets-per-second">0</h2>
+                    </div>
+                    <i class="fas fa-wave-square fa-2x text-secondary"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card metric-card h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="card-title text-secondary">Bandwidth</h5>
+                        <h2 id="bytes-per-second">0 B/s</h2>
+                    </div>
+                    <i class="fas fa-network-wired fa-2x text-secondary"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card metric-card h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="card-title text-secondary">Active Alerts</h5>
+                        <h2 id="active-alerts">0</h2>
+                    </div>
+                    <i class="fas fa-bell fa-2x text-secondary"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card metric-card h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="card-title text-secondary">System CPU</h5>
+                        <h2 id="system-cpu">0%</h2>
+                    </div>
+                    <i class="fas fa-microchip fa-2x text-secondary"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-lg-7 mb-4">
+        <div class="card h-100">
+            <div class="card-header"><h5 class="card-title">Traffic Timeline (30s)</h5></div>
+            <div class="card-body"><canvas id="traffic-chart"></canvas></div>
+        </div>
+    </div>
+    <div class="col-lg-5 mb-4">
+        <div class="card h-100">
+            <div class="card-header"><h5 class="card-title">Protocol Distribution</h5></div>
+            <div class="card-body"><canvas id="protocol-chart"></canvas></div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-6 mb-4">
+        <div class="card">
+            <div class="card-header"><h5 class="card-title">Recent Active Alerts</h5></div>
+            <div class="card-body" id="recent-alerts-container">
+                <p class="text-secondary text-center p-3">Awaiting data...</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6 mb-4">
+        <div class="card">
+            <div class="card-header"><h5 class="card-title">Top Talkers (Live)</h5></div>
+            <div class="card-body" id="top-talkers-container">
+                <p class="text-secondary text-center p-3">Awaiting data...</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const chartDefaults = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { ticks: { color: 'var(--text-secondary)' }, grid: { color: 'var(--border-color)' } },
+            y: { ticks: { color: 'var(--text-secondary)' }, grid: { color: 'var(--border-color)' }, beginAtZero: true }
+        }
+    };
+
+    const trafficChart = new Chart(document.getElementById('traffic-chart'), {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Packets/Second', data: [],
+                borderColor: 'var(--accent-primary)', backgroundColor: 'rgba(0, 255, 255, 0.1)',
+                tension: 0.3, fill: true, pointRadius: 0,
+                shadowColor: 'rgba(0, 255, 255, 0.5)', shadowBlur: 10
+            }]
+        },
+        options: chartDefaults
+    });
+
+    const protocolChart = new Chart(document.getElementById('protocol-chart'), {
+        type: 'doughnut',
+        data: {
+            labels: [],
+            datasets: [{
+                data: [],
+                backgroundColor: ['#00ffff', '#ff0055', '#00ff89', '#f7b733', '#9966FF'],
+                borderColor: 'var(--background-card)',
+                hoverOffset: 4
+            }]
+        },
+        options: { ...chartDefaults, scales: {} }
+    });
+
+    const UIManager = {
+        updateMetric: (id, val, fmt = v => v) => { document.getElementById(id).textContent = fmt(val); },
+        updateTrafficChart: (timeline) => {
+            if (!timeline || timeline.length === 0) return;
+            trafficChart.data.labels = timeline.map(p => new Date(p[0] * 1000).toLocaleTimeString());
+            trafficChart.data.datasets[0].data = timeline.map(p => p[1]);
+            trafficChart.update('none');
+        },
+        updateProtocolChart: (dist) => {
+            if (!dist) return;
+            protocolChart.data.labels = Object.keys(dist);
+            protocolChart.data.datasets[0].data = Object.values(dist);
+            protocolChart.update('none');
+        },
+        updateTopTalkers: (talkers) => {
+            const container = document.getElementById('top-talkers-container');
+            if (!talkers || Object.keys(talkers).length === 0) {
+                container.innerHTML = '<p class="text-secondary text-center p-3">Awaiting live traffic data...</p>';
+                return;
+            }
+            let html = '<ul class="list-group list-group-flush">';
+            Object.entries(talkers).forEach(([ip, count]) => {
+                html += `<li class="list-group-item bg-transparent text-white d-flex justify-content-between align-items-center">
+                            <code>${ip}</code>
+                            <span class="badge bg-primary rounded-pill">${count} pkts</span>
+                         </li>`;
+            });
+            container.innerHTML = html + '</ul>';
+        },
+        updateRecentAlerts: (alerts) => {
+            const container = document.getElementById('recent-alerts-container');
+            UIManager.updateMetric('active-alerts', alerts.length);
+            if (alerts.length === 0) {
+                container.innerHTML = '<p class="text-secondary text-center p-3">No active alerts. System is clear.</p>';
+                return;
+            }
+            let html = '<div class="list-group list-group-flush">';
+            alerts.slice(0, 5).forEach(alert => {
+                const colors = { HIGH: 'danger', MEDIUM: 'warning', LOW: 'success' };
+                html += `<div class="list-group-item bg-transparent text-white border-secondary">
+                            <div class="d-flex w-100 justify-content-between">
+                                <h6 class="mb-1 text-${colors[alert.severity.toUpperCase()] || 'light'}">${alert.title}</h6>
+                                <small>${new Date(alert.timestamp).toLocaleTimeString()}</small>
+                            </div>
+                            <p class="mb-1 small">${alert.description}</p>
+                            <small class="text-secondary">Source: <code>${alert.src_ip || 'N/A'}</code></small>
+                         </div>`;
+            });
+            container.innerHTML = html + '</div>';
+        },
+        formatBytes: (bytes) => {
+            if (!bytes || bytes === 0) return '0 B/s';
+            const i = Math.floor(Math.log(bytes) / Math.log(1024));
+            return `${parseFloat((bytes / Math.pow(1024, i)).toFixed(1))} ${['B', 'KB', 'MB', 'GB'][i]}/s`;
+        }
+    };
+
+    const DataManager = {
+        fetchInitialAlerts: () => fetch('/api/alerts/active').then(res => res.json()).then(UIManager.updateRecentAlerts).catch(console.error),
+        fetchSystemStatus: () => fetch('/api/system/status').then(res => res.json()).then(data => UIManager.updateMetric('system-cpu', data.system_cpu_percent, v => `${v.toFixed(1)}%`)).catch(console.error),
+        setupSocketListeners: () => {
+            window.socket.on('realtime_stats', (data) => {
+                UIManager.updateMetric('packets-per-second', Math.round(data.packets_per_second || 0));
+                UIManager.updateMetric('bytes-per-second', data.bytes_per_second || 0, UIManager.formatBytes);
+                UIManager.updateTrafficChart(data.packets_timeline);
+                UIManager.updateProtocolChart(data.protocol_distribution);
+                UIManager.updateTopTalkers(data.top_talkers);
+            });
+            window.socket.on('new_alert', DataManager.fetchInitialAlerts);
+            window.socket.on('alert_resolved', DataManager.fetchInitialAlerts);
+        }
+    };
+
+    DataManager.fetchInitialAlerts();
+    DataManager.fetchSystemStatus();
+    DataManager.setupSocketListeners();
+    setInterval(DataManager.fetchSystemStatus, 5000);
+});
+</script>
+{% endblock %}

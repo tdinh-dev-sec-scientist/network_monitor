@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Statistics - Network Security Monitor{% endblock %}
+
+{% block content %}
+<style>
+    .btn-outline-secondary.active {
+        background-color: var(--accent-primary);
+        color: var(--background-primary);
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 15px var(--accent-primary);
+    }
+</style>
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom" style="border-color: var(--border-color) !important;">
+    <h1 class="h2">Historical Statistics</h1>
+    <div class="btn-toolbar mb-2 mb-md-0">
+        <div class="btn-group me-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary time-range-btn active" data-hours="24">Last 24 Hours</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary time-range-btn" data-hours="168">Last 7 Days</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary time-range-btn" data-hours="720">Last 30 Days</button>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header"><h5 class="card-title">Network Volume Over Time</h5></div>
+            <div class="card-body" style="height: 400px;">
+                <canvas id="volume-chart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header"><h5 class="card-title">Protocol Breakdown Over Time</h5></div>
+            <div class="card-body" style="height: 400px;">
+                <canvas id="protocol-history-chart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header"><h5 class="card-title">Top Talkers (by Packets)</h5></div>
+            <div class="card-body p-0" id="top-talkers-history">
+                 <div class="text-center p-5"><div class="spinner-border text-primary" role="status"></div></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    let currentHours = 24;
+    let volumeChart, protocolHistoryChart;
+
+    const chartDefaults = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: true, position: 'top', labels: { color: 'var(--text-primary)' } } },
+        scales: {
+            x: { ticks: { color: 'var(--text-secondary)' }, grid: { color: 'var(--border-color)' } },
+            y: { ticks: { color: 'var(--text-secondary)' }, grid: { color: 'var(--border-color)' }, beginAtZero: true }
+        },
+        interaction: { mode: 'index', intersect: false }
+    };
+
+    const UIManager = {
+        initCharts: () => {
+            volumeChart = new Chart(document.getElementById('volume-chart'), {
+                type: 'line',
+                data: { labels: [], datasets: [
+                    { label: 'Total Packets', data: [], borderColor: 'var(--accent-primary)', yAxisID: 'y', tension: 0.3 },
+                    { label: 'Total Bytes (KB)', data: [], borderColor: 'var(--accent-secondary)', yAxisID: 'y1', tension: 0.3 }
+                ]},
+                options: { ...chartDefaults, scales: {
+                    x: { ticks: { color: 'var(--text-secondary)' }, grid: { color: 'var(--border-color)' } },
+                    y: { type: 'linear', display: true, position: 'left', title: { display: true, text: 'Packets', color: 'var(--text-secondary)' } },
+                    y1: { type: 'linear', display: true, position: 'right', title: { display: true, text: 'Kilobytes (KB)', color: 'var(--text-secondary)' }, grid: { drawOnChartArea: false } }
+                }}
+            });
+
+            protocolHistoryChart = new Chart(document.getElementById('protocol-history-chart'), {
+                type: 'bar',
+                data: { labels: [], datasets: [
+                    { label: 'TCP', data: [], backgroundColor: '#00ffff' },
+                    { label: 'UDP', data: [], backgroundColor: '#ff0055' },
+                    { label: 'ICMP', data: [], backgroundColor: '#00ff89' }
+                ]},
+                options: { ...chartDefaults, scales: {
+                    x: { stacked: true, ticks: { color: 'var(--text-secondary)' }, grid: { color: 'var(--border-color)' } },
+                    y: { stacked: true, ticks: { color: 'var(--text-secondary)' }, grid: { color: 'var(--border-color)' } }
+                }}
+            });
+        },
+        updateCharts: (stats) => {
+            const labels = stats.map(s => new Date(s.timestamp).toLocaleString());
+            volumeChart.data.labels = labels;
+            volumeChart.data.datasets[0].data = stats.map(s => s.total_packets);
+            volumeChart.data.datasets[1].data = stats.map(s => s.total_bytes / 1024);
+            volumeChart.update();
+
+            protocolHistoryChart.data.labels = labels;
+            protocolHistoryChart.data.datasets[0].data = stats.map(s => s.tcp_packets);
+            protocolHistoryChart.data.datasets[1].data = stats.map(s => s.udp_packets);
+            protocolHistoryChart.data.datasets[2].data = stats.map(s => s.icmp_packets);
+            protocolHistoryChart.update();
+        },
+        renderTopTalkers: (talkers) => {
+            const container = document.getElementById('top-talkers-history');
+            if (!talkers || talkers.length === 0) {
+                container.innerHTML = '<p class="text-center text-secondary p-5">No data available for this time range.</p>';
+                return;
+            }
+            let html = '<div class="table-responsive"><table class="table table-dark mb-0"><thead><tr><th>IP Address</th><th>Packet Count</th><th>Total Bytes</th></tr></thead><tbody>';
+            talkers.forEach(talker => {
+                html += `<tr><td><code>${talker.ip}</code></td><td>${talker.packet_count}</td><td>${UIManager.formatBytes(talker.total_bytes)}</td></tr>`;
+            });
+            container.innerHTML = html + '</tbody></table></div>';
+        },
+        formatBytes: (bytes) => {
+            if (!bytes || bytes === 0) return '0 B';
+            const i = Math.floor(Math.log(bytes) / Math.log(1024));
+            return `${parseFloat((bytes / Math.pow(1024, i)).toFixed(1))} ${['B', 'KB', 'MB', 'GB'][i]}`;
+        }
+    };
+
+    const DataManager = {
+        fetchData: () => {
+            fetch(`/api/stats/history?hours=${currentHours}`).then(res => res.json()).then(UIManager.updateCharts).catch(console.error);
+            fetch(`/api/traffic/top-talkers?hours=${currentHours}`).then(res => res.json()).then(UIManager.renderTopTalkers).catch(console.error);
+        }
+    };
+
+    UIManager.initCharts();
+    DataManager.fetchData();
+
+    document.querySelectorAll('.time-range-btn').forEach(button => {
+        button.addEventListener('click', () => {
+            document.querySelector('.time-range-btn.active').classList.remove('active');
+            button.classList.add('active');
+            currentHours = button.dataset.hours;
+            DataManager.fetchData();
+        });
+    });
+});
+</script>
+{% endblock %}
